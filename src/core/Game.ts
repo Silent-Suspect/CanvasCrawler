@@ -1,5 +1,9 @@
 import { InputManager } from './InputManager';
+import { Collision } from './Collision';
 import { Entity } from '../entities/Entity';
+import { Player } from '../entities/Player';
+import { Enemy } from '../entities/Enemy';
+import { Projectile } from '../entities/Projectile';
 
 /**
  * Game - Main game engine controller
@@ -17,6 +21,13 @@ export class Game {
     private running: boolean = false;
     private lastTimestamp: number = 0;
     private animationFrameId: number = 0;
+
+    // Player reference for enemy targeting
+    private player: Player | null = null;
+
+    // Enemy spawner
+    private spawnTimer: number = 0;
+    private readonly SPAWN_INTERVAL: number = 2; // seconds
 
     constructor(canvas: HTMLCanvasElement) {
         this.canvas = canvas;
@@ -55,6 +66,16 @@ export class Game {
 
     getHeight(): number {
         return this.canvas.getBoundingClientRect().height;
+    }
+
+    /** Set the player reference */
+    setPlayer(player: Player): void {
+        this.player = player;
+    }
+
+    /** Get the player */
+    getPlayer(): Player | null {
+        return this.player;
     }
 
     /** Add an entity to the game */
@@ -98,6 +119,7 @@ export class Game {
         this.entities = [];
         this.entitiesToAdd = [];
         this.entitiesToRemove.clear();
+        this.player = null;
     }
 
     /** Main game loop */
@@ -109,6 +131,7 @@ export class Game {
         this.lastTimestamp = timestamp;
 
         this.update(deltaTime);
+        this.checkCollisions();
         this.render();
 
         // Reset per-frame input states
@@ -133,9 +156,84 @@ export class Game {
             }
         }
 
+        // Enemy spawner
+        this.spawnTimer += dt;
+        if (this.spawnTimer >= this.SPAWN_INTERVAL) {
+            this.spawnTimer = 0;
+            this.spawnEnemy();
+        }
+
         // Remove destroyed entities
         this.entities = this.entities.filter(e => !e.destroyed && !this.entitiesToRemove.has(e));
         this.entitiesToRemove.clear();
+    }
+
+    /** Spawn an enemy at a random edge of the screen */
+    private spawnEnemy(): void {
+        if (!this.player) return;
+
+        const width = this.getWidth();
+        const height = this.getHeight();
+        const margin = 50;
+
+        let x: number, y: number;
+
+        // Pick a random edge (0: top, 1: right, 2: bottom, 3: left)
+        const edge = Math.floor(Math.random() * 4);
+        switch (edge) {
+            case 0: // Top
+                x = Math.random() * width;
+                y = -margin;
+                break;
+            case 1: // Right
+                x = width + margin;
+                y = Math.random() * height;
+                break;
+            case 2: // Bottom
+                x = Math.random() * width;
+                y = height + margin;
+                break;
+            default: // Left
+                x = -margin;
+                y = Math.random() * height;
+                break;
+        }
+
+        const enemy = new Enemy(x, y);
+        enemy.setTarget(this.player);
+        this.addEntity(enemy);
+    }
+
+    /** Check all collisions */
+    private checkCollisions(): void {
+        const projectiles = this.entities.filter(e => e instanceof Projectile && !e.destroyed) as Projectile[];
+        const enemies = this.entities.filter(e => e instanceof Enemy && !e.destroyed) as Enemy[];
+
+        // Projectile vs Enemy
+        for (const projectile of projectiles) {
+            for (const enemy of enemies) {
+                if (Collision.checkAABB(projectile, enemy)) {
+                    projectile.destroy();
+                    enemy.destroy();
+                    console.log('💥 Hit! Enemy destroyed!');
+                }
+            }
+        }
+
+        // Enemy vs Player
+        if (this.player && !this.player.destroyed) {
+            for (const enemy of enemies) {
+                if (enemy.destroyed) continue;
+
+                if (Collision.checkAABB(enemy, this.player)) {
+                    console.log('⚠️ Player Hit!');
+
+                    // Knockback the enemy
+                    const direction = Collision.getDirection(this.player, enemy);
+                    enemy.knockback(direction, 30);
+                }
+            }
+        }
     }
 
     /** Render the game */

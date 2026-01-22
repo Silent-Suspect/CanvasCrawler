@@ -21,6 +21,7 @@ function App() {
       game.getHeight() / 2 - 16
     );
     game.addEntity(player);
+    game.setPlayer(player);
 
     // Start the game loop
     game.start();
