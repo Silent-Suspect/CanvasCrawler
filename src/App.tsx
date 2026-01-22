@@ -23,6 +23,9 @@ function App() {
     game.addEntity(player);
     game.setPlayer(player);
 
+    // Initialize level (walls and enemies)
+    game.initLevel();
+
     // Start the game loop
     game.start();
 

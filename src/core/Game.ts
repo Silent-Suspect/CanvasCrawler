@@ -5,6 +5,7 @@ import { Player } from '../entities/Player';
 import { Enemy } from '../entities/Enemy';
 import { Projectile } from '../entities/Projectile';
 import { Particle } from '../entities/Particle';
+import { Wall } from '../entities/Wall';
 
 /**
  * Game - Main game engine controller
@@ -19,6 +20,7 @@ export class Game {
     private entitiesToAdd: Entity[] = [];
     private entitiesToRemove: Set<Entity> = new Set();
     private particles: Particle[] = [];
+    private walls: Wall[] = [];
 
     private running: boolean = false;
     private lastTimestamp: number = 0;
@@ -27,13 +29,10 @@ export class Game {
     // Player reference for enemy targeting
     private player: Player | null = null;
 
-    // Enemy spawner
-    private spawnTimer: number = 0;
-    private readonly SPAWN_INTERVAL: number = 2; // seconds
-
     // Game state
     public score: number = 0;
     public isGameOver: boolean = false;
+    private readonly ENEMY_COUNT: number = 5;
 
     constructor(canvas: HTMLCanvasElement) {
         this.canvas = canvas;
@@ -84,6 +83,11 @@ export class Game {
         return this.player;
     }
 
+    /** Get walls for collision checks */
+    getWalls(): Wall[] {
+        return this.walls;
+    }
+
     /** Add an entity to the game */
     addEntity(entity: Entity): void {
         entity.game = this;
@@ -131,7 +135,101 @@ export class Game {
         this.entitiesToAdd = [];
         this.entitiesToRemove.clear();
         this.particles = [];
+        this.walls = [];
         this.player = null;
+    }
+
+    /** Initialize the level with walls and enemies */
+    initLevel(): void {
+        this.generateLevel();
+        this.spawnEnemies();
+    }
+
+    /** Generate level layout with walls */
+    private generateLevel(): void {
+        this.walls = [];
+        const width = this.getWidth();
+        const height = this.getHeight();
+        const wallThickness = 20;
+
+        // Border walls
+        // Top
+        this.walls.push(new Wall(0, 0, width, wallThickness));
+        // Bottom
+        this.walls.push(new Wall(0, height - wallThickness, width, wallThickness));
+        // Left
+        this.walls.push(new Wall(0, 0, wallThickness, height));
+        // Right
+        this.walls.push(new Wall(width - wallThickness, 0, wallThickness, height));
+
+        // Internal obstacles (2-3 random blocks)
+        const obstacleCount = 2 + Math.floor(Math.random() * 2);
+        const obstacleSize = 60;
+        const margin = 100; // Keep away from edges and center
+
+        for (let i = 0; i < obstacleCount; i++) {
+            let x: number, y: number;
+            let attempts = 0;
+            const maxAttempts = 20;
+
+            // Find a valid position (not too close to center where player spawns)
+            do {
+                x = margin + Math.random() * (width - margin * 2 - obstacleSize);
+                y = margin + Math.random() * (height - margin * 2 - obstacleSize);
+                attempts++;
+
+                // Avoid center area where player spawns
+                const centerX = width / 2;
+                const centerY = height / 2;
+                const distToCenter = Math.sqrt(
+                    Math.pow(x + obstacleSize / 2 - centerX, 2) +
+                    Math.pow(y + obstacleSize / 2 - centerY, 2)
+                );
+
+                if (distToCenter > 120) break;
+            } while (attempts < maxAttempts);
+
+            this.walls.push(new Wall(x, y, obstacleSize, obstacleSize));
+        }
+    }
+
+    /** Spawn fixed number of enemies at valid positions */
+    private spawnEnemies(): void {
+        if (!this.player) return;
+
+        const width = this.getWidth();
+        const height = this.getHeight();
+        const margin = 80;
+        const enemySize = 28;
+
+        for (let i = 0; i < this.ENEMY_COUNT; i++) {
+            let x: number, y: number;
+            let attempts = 0;
+            const maxAttempts = 50;
+
+            // Find valid spawn position (not in walls, not too close to player)
+            do {
+                x = margin + Math.random() * (width - margin * 2 - enemySize);
+                y = margin + Math.random() * (height - margin * 2 - enemySize);
+                attempts++;
+
+                // Check distance from player
+                const playerCenter = this.player.getCenter();
+                const dist = Math.sqrt(
+                    Math.pow(x + enemySize / 2 - playerCenter.x, 2) +
+                    Math.pow(y + enemySize / 2 - playerCenter.y, 2)
+                );
+
+                // Must be away from player and not in walls
+                if (dist > 200 && !Collision.rectOverlapsWalls(x, y, enemySize, enemySize, this.walls)) {
+                    break;
+                }
+            } while (attempts < maxAttempts);
+
+            const enemy = new Enemy(x, y);
+            enemy.setTarget(this.player);
+            this.addEntity(enemy);
+        }
     }
 
     /** Restart the game */
@@ -141,11 +239,11 @@ export class Game {
         this.entitiesToAdd = [];
         this.entitiesToRemove.clear();
         this.particles = [];
+        this.walls = [];
 
         // Reset state
         this.score = 0;
         this.isGameOver = false;
-        this.spawnTimer = 0;
 
         // Create new player
         const player = new Player(
@@ -154,6 +252,9 @@ export class Game {
         );
         this.addEntity(player);
         this.player = player;
+
+        // Generate level and spawn enemies
+        this.initLevel();
     }
 
     /** Main game loop */
@@ -161,7 +262,7 @@ export class Game {
         if (!this.running) return;
 
         // Calculate delta time in seconds
-        const deltaTime = Math.min((timestamp - this.lastTimestamp) / 1000, 0.1); // Cap at 100ms
+        const deltaTime = Math.min((timestamp - this.lastTimestamp) / 1000, 0.1);
         this.lastTimestamp = timestamp;
 
         this.update(deltaTime);
@@ -209,16 +310,14 @@ export class Game {
         // Check game over
         if (this.player && this.player.hp <= 0) {
             this.isGameOver = true;
-            // Death explosion
             const center = this.player.getCenter();
             this.addParticles(Particle.burst(center.x, center.y, '#3b82f6', 15, 200, 6));
         }
 
-        // Enemy spawner
-        this.spawnTimer += dt;
-        if (this.spawnTimer >= this.SPAWN_INTERVAL) {
-            this.spawnTimer = 0;
-            this.spawnEnemy();
+        // Check win condition (all enemies dead)
+        const enemies = this.entities.filter(e => e instanceof Enemy && !e.destroyed);
+        if (enemies.length === 0 && !this.isGameOver && this.entities.length > 1) {
+            // Room cleared! Could add victory state later
         }
 
         // Remove destroyed entities
@@ -226,49 +325,31 @@ export class Game {
         this.entitiesToRemove.clear();
     }
 
-    /** Spawn an enemy at a random edge of the screen */
-    private spawnEnemy(): void {
-        if (!this.player) return;
-
-        const width = this.getWidth();
-        const height = this.getHeight();
-        const margin = 50;
-
-        let x: number, y: number;
-
-        // Pick a random edge (0: top, 1: right, 2: bottom, 3: left)
-        const edge = Math.floor(Math.random() * 4);
-        switch (edge) {
-            case 0: // Top
-                x = Math.random() * width;
-                y = -margin;
-                break;
-            case 1: // Right
-                x = width + margin;
-                y = Math.random() * height;
-                break;
-            case 2: // Bottom
-                x = Math.random() * width;
-                y = height + margin;
-                break;
-            default: // Left
-                x = -margin;
-                y = Math.random() * height;
-                break;
-        }
-
-        const enemy = new Enemy(x, y);
-        enemy.setTarget(this.player);
-        this.addEntity(enemy);
-    }
-
     /** Check all collisions */
     private checkCollisions(): void {
         const projectiles = this.entities.filter(e => e instanceof Projectile && !e.destroyed) as Projectile[];
         const enemies = this.entities.filter(e => e instanceof Enemy && !e.destroyed) as Enemy[];
 
+        // Entity vs Wall collisions
+        this.checkWallCollisions();
+
+        // Projectile vs Wall
+        for (const projectile of projectiles) {
+            for (const wall of this.walls) {
+                if (Collision.checkAABB(projectile, wall)) {
+                    projectile.destroy();
+                    // Poof particles
+                    const center = projectile.getCenter();
+                    this.addParticles(Particle.scatter(center.x, center.y, '#9ca3af', 3, 60));
+                    break;
+                }
+            }
+        }
+
         // Projectile vs Enemy
         for (const projectile of projectiles) {
+            if (projectile.destroyed) continue;
+
             for (const enemy of enemies) {
                 if (enemy.destroyed) continue;
 
@@ -283,7 +364,6 @@ export class Game {
                     // Check if enemy died
                     if (enemy.hp <= 0) {
                         this.score += 10;
-                        // Death explosion
                         this.addParticles(Particle.burst(center.x, center.y, '#ef4444', 8, 150, 5));
                         console.log(`💥 Enemy destroyed! Score: ${this.score}`);
                     }
@@ -297,11 +377,8 @@ export class Game {
                 if (enemy.destroyed) continue;
 
                 if (Collision.checkAABB(enemy, this.player)) {
-                    // Try to damage player (respects invulnerability)
                     if (this.player.takeDamage(10)) {
                         console.log(`⚠️ Player Hit! HP: ${this.player.hp}`);
-
-                        // Blood particles
                         const center = this.player.getCenter();
                         this.addParticles(Particle.scatter(center.x, center.y, '#dc2626', 5));
                     }
@@ -314,14 +391,40 @@ export class Game {
         }
     }
 
+    /** Check and resolve wall collisions for all movable entities */
+    private checkWallCollisions(): void {
+        // Player vs walls
+        if (this.player && !this.player.destroyed) {
+            for (const wall of this.walls) {
+                Collision.resolveWallCollision(this.player, wall);
+            }
+        }
+
+        // Enemies vs walls
+        const enemies = this.entities.filter(e => e instanceof Enemy && !e.destroyed) as Enemy[];
+        for (const enemy of enemies) {
+            for (const wall of this.walls) {
+                Collision.resolveWallCollision(enemy, wall);
+            }
+        }
+    }
+
     /** Render the game */
     private render(): void {
         const width = this.getWidth();
         const height = this.getHeight();
 
         // Clear the canvas with a dark background
-        this.ctx.fillStyle = '#0a0a0a';
+        this.ctx.fillStyle = '#0f0f0f';
         this.ctx.fillRect(0, 0, width, height);
+
+        // Draw floor pattern (subtle grid)
+        this.drawFloor();
+
+        // Draw walls
+        for (const wall of this.walls) {
+            wall.draw(this.ctx);
+        }
 
         // Draw particles (behind entities)
         for (const particle of this.particles) {
@@ -344,19 +447,40 @@ export class Game {
         }
     }
 
+    /** Draw floor tile pattern */
+    private drawFloor(): void {
+        const tileSize = 40;
+        const width = this.getWidth();
+        const height = this.getHeight();
+
+        this.ctx.strokeStyle = '#1a1a1a';
+        this.ctx.lineWidth = 1;
+
+        for (let x = 0; x < width; x += tileSize) {
+            for (let y = 0; y < height; y += tileSize) {
+                this.ctx.strokeRect(x, y, tileSize, tileSize);
+            }
+        }
+    }
+
     /** Draw the UI overlay */
     private drawUI(): void {
         // Score
         this.ctx.fillStyle = '#ffffff';
         this.ctx.font = 'bold 24px monospace';
         this.ctx.textAlign = 'left';
-        this.ctx.fillText(`Score: ${this.score}`, 20, 80);
+        this.ctx.fillText(`Score: ${this.score}`, 30, 60);
 
         // HP
         if (this.player && !this.isGameOver) {
             this.ctx.fillStyle = '#22c55e';
-            this.ctx.fillText(`HP: ${this.player.hp}`, 20, 110);
+            this.ctx.fillText(`HP: ${this.player.hp}`, 30, 90);
         }
+
+        // Enemy count
+        const enemies = this.entities.filter(e => e instanceof Enemy && !e.destroyed);
+        this.ctx.fillStyle = '#ef4444';
+        this.ctx.fillText(`Enemies: ${enemies.length}`, 30, 120);
     }
 
     /** Draw game over screen */
