@@ -9,6 +9,10 @@ import { Vector2 } from '../utils/Vector2';
 export class Enemy extends Entity {
     private target: Player | null = null;
 
+    // Health system
+    public hp: number = 3;
+    public maxHp: number = 3;
+
     constructor(x: number, y: number) {
         super(x, y);
         this.width = 28;
@@ -19,6 +23,15 @@ export class Enemy extends Entity {
     /** Set the target to chase */
     setTarget(player: Player): void {
         this.target = player;
+    }
+
+    /** Apply damage to enemy */
+    takeDamage(amount: number): void {
+        this.hp -= amount;
+        if (this.hp <= 0) {
+            this.hp = 0;
+            this.destroy();
+        }
     }
 
     update(dt: number): void {
@@ -68,5 +81,31 @@ export class Enemy extends Entity {
         ctx.fillRect(2, -4, 4, 4);
 
         ctx.restore();
+
+        // Draw HP bar if damaged
+        if (this.hp < this.maxHp) {
+            this.drawHpBar(ctx);
+        }
+    }
+
+    private drawHpBar(ctx: CanvasRenderingContext2D): void {
+        const barWidth = this.width;
+        const barHeight = 3;
+        const barX = this.position.x + this.width / 2 - barWidth / 2;
+        const barY = this.position.y - 8;
+
+        // Background
+        ctx.fillStyle = '#374151'; // gray-700
+        ctx.fillRect(barX, barY, barWidth, barHeight);
+
+        // Health fill
+        const fillWidth = (this.hp / this.maxHp) * barWidth;
+        ctx.fillStyle = '#ef4444'; // red-500
+        ctx.fillRect(barX, barY, fillWidth, barHeight);
+
+        // Border
+        ctx.strokeStyle = '#1f2937'; // gray-800
+        ctx.lineWidth = 1;
+        ctx.strokeRect(barX, barY, barWidth, barHeight);
     }
 }

@@ -4,6 +4,7 @@ import { Entity } from '../entities/Entity';
 import { Player } from '../entities/Player';
 import { Enemy } from '../entities/Enemy';
 import { Projectile } from '../entities/Projectile';
+import { Particle } from '../entities/Particle';
 
 /**
  * Game - Main game engine controller
@@ -17,6 +18,7 @@ export class Game {
     private entities: Entity[] = [];
     private entitiesToAdd: Entity[] = [];
     private entitiesToRemove: Set<Entity> = new Set();
+    private particles: Particle[] = [];
 
     private running: boolean = false;
     private lastTimestamp: number = 0;
@@ -28,6 +30,10 @@ export class Game {
     // Enemy spawner
     private spawnTimer: number = 0;
     private readonly SPAWN_INTERVAL: number = 2; // seconds
+
+    // Game state
+    public score: number = 0;
+    public isGameOver: boolean = false;
 
     constructor(canvas: HTMLCanvasElement) {
         this.canvas = canvas;
@@ -94,6 +100,11 @@ export class Game {
         return this.entities;
     }
 
+    /** Add particles to the game */
+    addParticles(newParticles: Particle[]): void {
+        this.particles.push(...newParticles);
+    }
+
     /** Start the game loop */
     start(): void {
         if (this.running) return;
@@ -119,7 +130,30 @@ export class Game {
         this.entities = [];
         this.entitiesToAdd = [];
         this.entitiesToRemove.clear();
+        this.particles = [];
         this.player = null;
+    }
+
+    /** Restart the game */
+    private restart(): void {
+        // Clear entities
+        this.entities = [];
+        this.entitiesToAdd = [];
+        this.entitiesToRemove.clear();
+        this.particles = [];
+
+        // Reset state
+        this.score = 0;
+        this.isGameOver = false;
+        this.spawnTimer = 0;
+
+        // Create new player
+        const player = new Player(
+            this.getWidth() / 2 - 16,
+            this.getHeight() / 2 - 16
+        );
+        this.addEntity(player);
+        this.player = player;
     }
 
     /** Main game loop */
@@ -131,7 +165,9 @@ export class Game {
         this.lastTimestamp = timestamp;
 
         this.update(deltaTime);
-        this.checkCollisions();
+        if (!this.isGameOver) {
+            this.checkCollisions();
+        }
         this.render();
 
         // Reset per-frame input states
@@ -143,6 +179,14 @@ export class Game {
 
     /** Update game logic */
     private update(dt: number): void {
+        // Check for restart
+        if (this.isGameOver) {
+            if (this.input.isKeyDown('r')) {
+                this.restart();
+            }
+            return;
+        }
+
         // Add pending entities
         if (this.entitiesToAdd.length > 0) {
             this.entities.push(...this.entitiesToAdd);
@@ -154,6 +198,20 @@ export class Game {
             if (!entity.destroyed) {
                 entity.update(dt);
             }
+        }
+
+        // Update particles
+        for (const particle of this.particles) {
+            particle.update(dt);
+        }
+        this.particles = this.particles.filter(p => !p.destroyed);
+
+        // Check game over
+        if (this.player && this.player.hp <= 0) {
+            this.isGameOver = true;
+            // Death explosion
+            const center = this.player.getCenter();
+            this.addParticles(Particle.burst(center.x, center.y, '#3b82f6', 15, 200, 6));
         }
 
         // Enemy spawner
@@ -212,10 +270,23 @@ export class Game {
         // Projectile vs Enemy
         for (const projectile of projectiles) {
             for (const enemy of enemies) {
+                if (enemy.destroyed) continue;
+
                 if (Collision.checkAABB(projectile, enemy)) {
                     projectile.destroy();
-                    enemy.destroy();
-                    console.log('💥 Hit! Enemy destroyed!');
+                    enemy.takeDamage(1);
+
+                    // Spawn hit particles
+                    const center = enemy.getCenter();
+                    this.addParticles(Particle.scatter(center.x, center.y, '#ef4444', 3));
+
+                    // Check if enemy died
+                    if (enemy.hp <= 0) {
+                        this.score += 10;
+                        // Death explosion
+                        this.addParticles(Particle.burst(center.x, center.y, '#ef4444', 8, 150, 5));
+                        console.log(`💥 Enemy destroyed! Score: ${this.score}`);
+                    }
                 }
             }
         }
@@ -226,7 +297,14 @@ export class Game {
                 if (enemy.destroyed) continue;
 
                 if (Collision.checkAABB(enemy, this.player)) {
-                    console.log('⚠️ Player Hit!');
+                    // Try to damage player (respects invulnerability)
+                    if (this.player.takeDamage(10)) {
+                        console.log(`⚠️ Player Hit! HP: ${this.player.hp}`);
+
+                        // Blood particles
+                        const center = this.player.getCenter();
+                        this.addParticles(Particle.scatter(center.x, center.y, '#dc2626', 5));
+                    }
 
                     // Knockback the enemy
                     const direction = Collision.getDirection(this.player, enemy);
@@ -245,11 +323,65 @@ export class Game {
         this.ctx.fillStyle = '#0a0a0a';
         this.ctx.fillRect(0, 0, width, height);
 
+        // Draw particles (behind entities)
+        for (const particle of this.particles) {
+            particle.draw(this.ctx);
+        }
+
         // Draw all entities
         for (const entity of this.entities) {
             if (!entity.destroyed) {
                 entity.draw(this.ctx);
             }
         }
+
+        // Draw UI
+        this.drawUI();
+
+        // Draw game over overlay
+        if (this.isGameOver) {
+            this.drawGameOver();
+        }
+    }
+
+    /** Draw the UI overlay */
+    private drawUI(): void {
+        // Score
+        this.ctx.fillStyle = '#ffffff';
+        this.ctx.font = 'bold 24px monospace';
+        this.ctx.textAlign = 'left';
+        this.ctx.fillText(`Score: ${this.score}`, 20, 80);
+
+        // HP
+        if (this.player && !this.isGameOver) {
+            this.ctx.fillStyle = '#22c55e';
+            this.ctx.fillText(`HP: ${this.player.hp}`, 20, 110);
+        }
+    }
+
+    /** Draw game over screen */
+    private drawGameOver(): void {
+        const width = this.getWidth();
+        const height = this.getHeight();
+
+        // Semi-transparent overlay
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        this.ctx.fillRect(0, 0, width, height);
+
+        // Game Over text
+        this.ctx.fillStyle = '#ef4444';
+        this.ctx.font = 'bold 64px monospace';
+        this.ctx.textAlign = 'center';
+        this.ctx.fillText('GAME OVER', width / 2, height / 2 - 40);
+
+        // Final score
+        this.ctx.fillStyle = '#ffffff';
+        this.ctx.font = 'bold 32px monospace';
+        this.ctx.fillText(`Final Score: ${this.score}`, width / 2, height / 2 + 20);
+
+        // Restart prompt
+        this.ctx.fillStyle = '#fbbf24';
+        this.ctx.font = '24px monospace';
+        this.ctx.fillText('Press R to Restart', width / 2, height / 2 + 70);
     }
 }
