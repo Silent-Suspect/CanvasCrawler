@@ -2,7 +2,13 @@
  * Vector2 utility class for 2D math operations
  */
 export class Vector2 {
-    constructor(public x: number = 0, public y: number = 0) { }
+    public x: number;
+    public y: number;
+
+    constructor(x: number = 0, y: number = 0) {
+        this.x = x;
+        this.y = y;
+    }
 
     /** Create a new Vector2 from an angle (in radians) */
     static fromAngle(angle: number, magnitude: number = 1): Vector2 {

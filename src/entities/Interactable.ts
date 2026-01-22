@@ -53,7 +53,6 @@ export class Interactable extends Entity {
 
     draw(ctx: CanvasRenderingContext2D): void {
         const centerX = this.position.x + this.width / 2;
-        const centerY = this.position.y + this.height / 2;
 
         ctx.save();
 

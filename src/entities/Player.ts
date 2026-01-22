@@ -1,7 +1,6 @@
 import { Entity } from './Entity';
 import { Projectile } from './Projectile';
 import { InputManager } from '../core/InputManager';
-import { Vector2 } from '../utils/Vector2';
 
 /**
  * Player - The hero character controlled by the player
